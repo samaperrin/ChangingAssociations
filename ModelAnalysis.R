@@ -19,7 +19,7 @@ library(gridExtra)
 
 # Import model and scripts
 NOFA_JSAM_results <- readRDS("ModelFile.RDS")
-source("JSAM_Functions.R")
+source("./CodesAndData/greta_pred_fns.R")
 
 # Define data and parameters
 NOFA_Data <- NOFA_JSAM_results$data
