@@ -16,7 +16,7 @@ association <- TRUE                    # Estimate associations over temperature 
 library(greta)
 library(dplyr)
 load("./CodesAndData/NOFA_Data_WC.rda")
-source("JSAM_Functions.R")
+source("./CodesAndData/greta_pred_fns.R")
 
 # Colinnearity check
 source("http://www.sthda.com/upload/rquery_cormat.r")
