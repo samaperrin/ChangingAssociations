@@ -47,9 +47,7 @@ if (reduced_species == TRUE) {
 
 # Load spatial component if necessary  
 if (spatial_component == TRUE) {
-  load("./CodesAndData/lake_geom_sf.RDA")
-  sites <- merge(NOFA_Data$full_data["waterBodyID"], dplyr::select(lake_geom_sf,-geometry),
-                 all.x=TRUE, by = "waterBodyID")
+  load("./CodesAndData/sites.RDA")
   sites <- sites[,c("waterBodyID","inout")]
   site_no <- as_data(sites["inout"])
   n_valleys <- length(unique(site_no))
