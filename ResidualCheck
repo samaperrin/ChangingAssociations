@@ -1,0 +1,207 @@
+#----------------------------#
+### 1. FUNCTION CONSTRUCT ####
+#----------------------------#
+
+plot.resid <- function(linear.predictor, data, caption=c("Residuals vs linear predictors", "Normal Q-Q","Residuals vs row index", "Residuals vs column index","Scale-Location"), var.colors = NULL, add.smooth = TRUE, envelopes = TRUE, reps = 150, envelope.col = c("blue","lightblue"), n.plot = NULL, ...) {
+  
+  n <- length(linear.predictor)
+  
+  mains <- rep("", 4)
+  mains <- caption
+  
+  res <- residuals(linear.predictor = linear.predictor, data  = data)
+  xxx <- boxplot(c(linear.predictor), outline = FALSE,plot = FALSE)$stats
+  
+  gr.pars <- list(...)
+  par(...)
+  
+  if(is.null(gr.pars$xlim)) {
+    plot(linear.predictor, res, xlab = "linear predictors", ylab = "Dunn-Smyth-residuals",
+         type = "n", main = mains[1], xlim = c(min(xxx), max(xxx))); abline(0, 0, col = "grey", lty = 3)
+  } else {
+    plot(linear.predictor, res, xlab = "linear predictors", ylab = "Dunn-Smyth-residuals", type =
+           "n", col = rep(col, each = n), main = mains[1], ...); abline(0, 0, col = "grey", lty = 3)
+  }
+  
+  if(add.smooth) gamEnvelope(linear.predictor, res, envelopes = envelopes, envelope.col = envelope.col, ...)
+  
+  qq.x<-qqnorm(c(res), main = mains[2], ylab = "Dunn-Smyth residuals", cex = 0.5, xlab = "theoretical quantiles");
+  qqline(c(res), col = envelope.col[1])
+  if(envelopes){
+    K <- reps
+    yy <- quantile(res, c(0.25, 0.75), names = FALSE, type = 7, na.rm = TRUE)
+    xx <- qnorm(c(0.25, 0.75))
+    slope <- diff(yy) / diff(xx)
+    int <- yy[1L] - slope * xx[1L]
+    Xm <- Ym <- NULL
+    for (i in 1:K) {
+      ri <- (rnorm(n, int, sd = slope))
+      Ym <- cbind(Ym, sort(ri))
+    }
+    Xm <- sort(qq.x$x)
+    cis <- apply(Ym, 1, quantile, probs = c(0.025, 0.975))
+    
+    n.obs <- n
+    polygon(Xm[c(1:n.obs,n.obs:1)], c(cis[1, ],cis[2, n.obs:1]), col = envelope.col[2], border = NA)
+    points(qq.x, cex = 0.5)
+    qqline(c(res), col = envelope.col[1])
+  }
+  
+  sqres <- sqrt(abs(res))
+  yl <- as.expression(substitute(sqrt(abs(YL)), list(YL = as.name("Dunn-Smyth-residuals"))))
+  if(is.null(gr.pars$xlim)) {
+    plot(linear.predictor, sqres, xlab = "linear predictors", ylab = yl,
+         main = mains[5], xlim = c(min(xxx), max(xxx)), ...);
+  } else {
+    plot(linear.predictor, sqres, xlab = "linear predictors", ylab = yl,main = mains[5], ...);
+  }
+  if(add.smooth) panel.smooth(linear.predictor, sqres,col.smooth = envelope.col[1], ...)
+  #panel(linear.predictor, sqres, col = rep(col, each = n), cex = 1, cex.lab = 1, cex.axis = 1, lwd = 1)
+}
+
+residuals_fun <- function(linear.predictor,data) {
+  if(all(length(linear.predictor)!=length(data))){
+    stop("Linear predictor and data should have the same dimensions")
+  }
+  n <- length(data)
+  
+  res <- vector("numeric",n)
+  rownames(res) <- rownames(res)
+  colnames(res) <- colnames(res)
+  for (i in 1:n) {
+    a <- pbinom(as.vector(unlist(data[i])) - 1, 1, pnorm(linear.predictor)[i])
+    b <- pbinom(as.vector(unlist(data[i])), 1, pnorm(linear.predictor)[i])
+    u <- runif(n = 1, min = a, max = b)
+    if(u==1) u=1-1e-16
+    if(u==0) u=1e-16
+    res[i] <- qnorm(u)
+  }
+  
+  return(res)
+}
+
+# Load libraries
+library(greta)
+library(tensorflow)
+library(dplyr)
+library(corrplot)
+library(ggplot2)
+library(magrittr)
+library(gridExtra)
+
+#----------------------#
+### 2. IMPORT MODEL ####
+#----------------------#
+
+# Import model and relevant functions
+
+NOFA_JSAM_reduced <- readRDS("./CodesAndData/ReducedSpecies_rerun2409_onechain_extras_2LV.RDS")
+source("../../../UsefulRStuff/Greta_Basics/greta_pred_fns.R")
+
+# Define data and parameters
+NOFA_Data <- NOFA_JSAM_reduced$data
+X_base <- NOFA_Data$X[,-1] %>%
+  mutate(temp_sq = temperature^2)
+
+model <- NOFA_JSAM_reduced$model
+parameters <- NOFA_JSAM_reduced$parameters
+
+Y <- NOFA_Data$Y[,parameters$species_names]
+
+draws <- model$draws
+R_lower <- model$R_lower
+R <- model$R
+beta <- model$beta
+alpha <- model$alpha
+p <- model$p
+z <- model$z
+lambda_int <- model$lambda_int
+lambda_coef <- model$lambda_coef
+R_pred_ident <- model$R_pred_ident
+R_ident <- model$R_ident
+
+n_species <- parameters$n_species
+valid_species <- parameters$valid_species
+
+temp_sd <- 10/sd(NOFA_Data$full_data$eurolst_bio10)
+X_assoc_pred <- parameters$X_assoc_pred
+X_assoc_pred_nonSD <- round(mean(NOFA_Data$full_data$eurolst_bio10) + 
+                              X_assoc_pred * sd(NOFA_Data$full_data$eurolst_bio10),1)/10
+
+rm(NOFA_JSAM_reduced)
+
+#-----------------------#
+### 2. GET RESIDUALS ####
+#-----------------------#
+
+# These libraries allow us to do some parallel computing, speeds up processing time.
+library(future)
+library(furrr)
+library(purrr)
+
+plan(multiprocess)
+time1 <- Sys.time()
+
+# Get p values for each species and site (still takes a while).
+p_values_list <- furrr::future_map(.x = 1:ncol(p), .progress = TRUE,
+                                   .f = ~{
+                                     p_temp <- calculate(p[,.x], values = draws)
+                                     p_out <- as.matrix(p_temp)
+                                     p_out_medians <- apply(p_out,2,median)
+                                     p_out_medians
+                                   }
+)
+
+Sys.time()-time1
+
+# Arranges p values for each species.
+p_values_matrix <- matrix(NA, nrow=nrow(p), ncol = ncol(p))
+for (l in 1:ncol(p)) {
+  p_values_matrix[,l] <- p_values_list[[l]]
+}
+
+# Get residuals using function defined in first section.
+library(modEvA)
+residuals_all <- furrr::future_map(.x = 1:ncol(p_values_matrix),
+                                   .f = ~{
+                                     residual_ind <- residuals_fun(Y[,.x],p_values_matrix[,.x])
+                                     residual_ind
+                                   }
+) %>%
+  set_names(colnames(Y)) %>%
+  bind_cols() %>%
+  as.data.frame()
+
+# Add in latitude and longitude so we can plot the residuals spatially.
+resid_df <- data.frame(residuals_all, latitude = NOFA_Data$full_data$decimalLatitude,
+                       longitude = NOFA_Data$full_data$decimalLongitude)
+
+library(raster)
+library(ggplot2)
+library(sf)
+library(dplyr)
+
+Norway<-getData("GADM", country="NO", level=0)
+Sweden<-getData("GADM", country="SE", level=0)
+Finland <- getData("GADM", country="FI", level=0)
+
+Nordic <- bind(Norway, Sweden, Finland)
+
+Nordic_df <- fortify(Nordic)
+Nordic_sub_sf <- st_as_sf(Nordic)
+
+species <- "Salmo_trutta"
+
+ggplot(data=resid_df) + 
+  geom_sf(data = Nordic_sub_sf, fill = "white",linetype=1,lwd=0.1) +
+  stat_summary_hex(aes(x = longitude, 
+                       y = latitude,
+                       z=resid_df[,species]),
+                   bins=75) +
+  xlab("Longitude") + 
+  ylab("Latitude") +
+  scale_fill_gradient(name = "Residual variance",low = 'bisque', high="firebrick4",
+                      breaks=seq(-5,5,2.5), #breaks in the scale bar
+                      limits=c(-5,5)) +
+  ggtitle(paste0("d) ",gsub("_"," ",species)))
+  
